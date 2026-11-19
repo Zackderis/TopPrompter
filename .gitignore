@@ -1,0 +1,10 @@
+# Build output
+TopPrompter.app/
+share/
+# Personal logs and recordings (voice log, take audio)
+logs/
+# Local test output and screenshots
+tests/*.png
+tests/*.log
+tests/script-backup.txt
+.DS_Store

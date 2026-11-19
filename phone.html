@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="TopPrompter">
+<meta name="theme-color" content="#000000">
+<title>TopPrompter</title>
+<style>
+  :root { --bg:#000; --fg:#fff; --dim:rgba(255,255,255,.32); --bar:rgba(28,28,30,.92); --muted:rgba(255,255,255,.55); --ok:#30d158; --warn:#ff9f0a; --size:34px; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); overflow:hidden;
+    font-family:-apple-system, "SF Pro Display", system-ui, sans-serif; -webkit-user-select:none; user-select:none; }
+  #stage { position:fixed; inset:0; overflow:hidden; }
+  #flip { position:absolute; inset:0; }
+  #flip.mirror { transform:scaleX(-1); }
+  #text { position:absolute; left:0; right:0; top:0; will-change:transform;
+    padding:0 max(18px, env(safe-area-inset-right)) 0 max(18px, env(safe-area-inset-left));
+    white-space:pre-wrap; text-align:center; font-weight:650; font-size:var(--size); line-height:1.3;
+    overflow-wrap:break-word; }
+  ::highlight(read) { color:var(--dim); }
+  ::highlight(note) { color:rgba(255,255,255,.28); }
+  ::highlight(word) { background-color:#ffd60a; color:#000; }
+  #fadeTop, #fadeBottom { position:absolute; left:0; right:0; pointer-events:none; }
+  #fadeTop { top:0; height:calc(env(safe-area-inset-top) + 24px); background:linear-gradient(#000 40%, transparent); }
+  #fadeBottom { bottom:0; height:22%; background:linear-gradient(transparent, #000 85%); }
+  #bar { position:fixed; left:50%; transform:translateX(-50%); bottom:calc(env(safe-area-inset-bottom) + 10px);
+    display:flex; gap:4px; align-items:center; padding:6px 8px; border-radius:16px; background:var(--bar);
+    transition:opacity .35s; max-width:calc(100% - 20px); flex-wrap:wrap; justify-content:center; }
+  #bar.quiet { opacity:.28; }
+  #bar button { appearance:none; border:0; background:transparent; color:var(--fg); font:600 11px -apple-system, system-ui;
+    min-width:46px; padding:6px 4px; border-radius:10px; display:flex; flex-direction:column; align-items:center; gap:3px; }
+  #bar button:active { background:rgba(255,255,255,.12); }
+  #bar button svg { width:20px; height:20px; fill:currentColor; }
+  #bar .sep { width:1px; height:26px; background:rgba(255,255,255,.14); margin:0 2px; }
+  #status { position:fixed; top:calc(env(safe-area-inset-top) + 6px); right:max(10px, env(safe-area-inset-right));
+    display:flex; align-items:center; gap:6px; font:600 11px -apple-system, system-ui; color:var(--muted); pointer-events:none; }
+  #dot { width:8px; height:8px; border-radius:50%; background:var(--warn); }
+  #dot.ok { background:var(--ok); opacity:.45; }
+  #dot.hear { background:var(--ok); opacity:1; }
+  #msg { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; padding:32px; text-align:center;
+    font:600 18px/1.4 -apple-system, system-ui; color:var(--muted); background:rgba(0,0,0,.85); }
+  #wake { position:fixed; width:1px; height:1px; opacity:0; pointer-events:none; }
+</style>
+</head>
+<body>
+<div id="stage"><div id="flip"><div id="text"></div><div id="fadeTop"></div><div id="fadeBottom"></div></div></div>
+<div id="status"><span id="mode">Connecting…</span><span id="dot"></span></div>
+<div id="bar" class="quiet">
+  <button id="bRestart" aria-label="Restart"><svg viewBox="0 0 24 24"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg>Restart</button>
+  <button id="bPlay" aria-label="Play"><svg viewBox="0 0 24 24"><path id="playIcon" d="M7 4v16l13-8z"/></svg><span id="playLabel">Play</span></button>
+  <span class="sep"></span>
+  <button id="bSlower" aria-label="Slower"><svg viewBox="0 0 24 24"><path d="M5 11h14v2H5z"/></svg>Slower</button>
+  <button id="bFaster" aria-label="Faster"><svg viewBox="0 0 24 24"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>Faster</button>
+  <span class="sep"></span>
+  <button id="bSmaller" aria-label="Smaller text"><svg viewBox="0 0 24 24"><text x="12" y="18" font-size="13" text-anchor="middle" font-weight="700">A</text></svg>Smaller</button>
+  <button id="bBigger" aria-label="Bigger text"><svg viewBox="0 0 24 24"><text x="12" y="20" font-size="21" text-anchor="middle" font-weight="700">A</text></svg>Bigger</button>
+  <button id="bMirror" aria-label="Mirror"><svg viewBox="0 0 24 24"><path d="M11 3h2v18h-2zM9 7v10L3 12zM15 7v10l6-5z"/></svg>Mirror</button>
+  <button id="bHide" aria-label="Hide controls"><svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>Hide</button>
+</div>
+<div id="msg" hidden></div>
+<video id="wake" muted playsinline loop src="data:video/mp4;base64,__WAKE_VIDEO__"></video>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const textEl = $('text'), bar = $('bar'), msg = $('msg');
+  const store = { get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+                  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
+
+  let size = store.get('size', 30), mirror = store.get('mirror', false);
+  let scriptV = -1, node = null, lines = [], len = 0;
+  let lastC = 0, lastAt = 0, rate = 0, shownY = 0, havePos = false, playing = false, failures = 0;
+
+  function applySize() { document.documentElement.style.setProperty('--size', size + 'px'); store.set('size', size); relayout(); }
+  function applyMirror() { $('flip').classList.toggle('mirror', mirror); store.set('mirror', mirror); }
+
+  // Build a table of where each visual line starts (character index + top), so a character
+  // position from the Mac maps to the same reading spot here, whatever the line wrapping.
+  function relayout() {
+    lines = [];
+    if (!node || !len) return;
+    const r = document.createRange(), base = textEl.getBoundingClientRect().top;
+    let lastTop = -1e9;
+    for (let i = 0; i < len; i++) {
+      r.setStart(node, i); r.setEnd(node, i + 1);
+      const rects = r.getClientRects();
+      if (!rects.length) continue;
+      const top = rects[0].top - base;
+      if (top > lastTop + 2) { lines.push({ s: i, top }); lastTop = top; }
+    }
+    lines.push({ s: len, top: textEl.offsetHeight });
+  }
+
+  function yFor(c) {
+    if (!lines.length) return 0;
+    if (c <= lines[0].s) return lines[0].top;
+    let lo = 0, hi = lines.length - 1;
+    while (lo < hi - 1) { const m = (lo + hi) >> 1; if (lines[m].s <= c) lo = m; else hi = m; }
+    const a = lines[lo], b = lines[hi];
+    const f = b.s > a.s ? Math.min(1, (c - a.s) / (b.s - a.s)) : 0;
+    return a.top + f * (b.top - a.top);
+  }
+
+  // One sentence per line: swap the single space after . ! ? for a line break. Same length,
+  // so character positions from the Mac still line up exactly.
+  function bySentence(t) { return t.replace(/([.!?…]["”’)\]]?) (?=\S)/g, '$1\n'); }
+
+  function setScript(text) {
+    const shown = bySentence(text);
+    textEl.textContent = shown;
+    node = textEl.firstChild; len = shown.length;
+    relayout(); lastDim = -1; lastWord = ''; markNotes(shown);
+  }
+
+  // Grey out notes you don't read aloud: [..], (..) and take labels like "Z01".
+  function markNotes(t) {
+    if (!node || !window.CSS || !CSS.highlights) return;
+    const re = /\[[^\]]*\]|\([^)]*\)|^\s*[A-Z]{1,3}\d{1,3}[A-Z]?\s*$/gm;
+    const hl = new Highlight(); let m;
+    while ((m = re.exec(t))) { if (!m[0].length) { re.lastIndex++; continue; } const r = new Range(); r.setStart(node, m.index); r.setEnd(node, m.index + m[0].length); hl.add(r); }
+    CSS.highlights.set('note', hl);
+  }
+
+  let lastWord = '';
+  function setWord(w, wl) {
+    const key = w + ':' + wl;
+    if (key === lastWord || !node || !window.CSS || !CSS.highlights) return;
+    lastWord = key;
+    CSS.highlights.delete('word');
+    if (w >= 0 && wl > 0 && w + wl <= len) { const r = new Range(); r.setStart(node, w); r.setEnd(node, w + wl); CSS.highlights.set('word', new Highlight(r)); }
+  }
+
+  // Index of the visual line holding character c.
+  function lineIndex(c) {
+    let lo = 0, hi = lines.length - 1;
+    while (lo < hi - 1) { const m = (lo + hi) >> 1; if (lines[m].s <= c) lo = m; else hi = m; }
+    return lo;
+  }
+  let followY = null;   // in Follow mode the phone positions by the word you're on
+
+  let lastDim = -1;
+  function setDim(d) {
+    if (d === lastDim || !node || !window.CSS || !CSS.highlights) return;
+    lastDim = d;
+    CSS.highlights.delete('read');
+    if (d > 0) { const r = new Range(); r.setStart(node, 0); r.setEnd(node, Math.min(d, len)); CSS.highlights.set('read', new Highlight(r)); }
+  }
+
+  async function getJSON(path) {
+    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 1500);
+    try { const r = await fetch(path, { cache: 'no-store', signal: ctl.signal }); return await r.json(); }
+    finally { clearTimeout(t); }
+  }
+
+  const modeNames = ['Manual', 'Talk', 'Follow'];
+  async function poll() {
+    try {
+      const s = await getJSON('state');
+      failures = 0; msg.hidden = true;
+      if (s.v !== scriptV) { const sc = await getJSON('script'); scriptV = sc.v; setScript(sc.text); }
+      const now = performance.now();
+      if (havePos) {
+        const dt = (now - lastAt) / 1000;
+        const inst = dt > 0 ? (s.c - lastC) / dt : 0;
+        rate = (s.p && Math.abs(s.c - lastC) < 400) ? rate * 0.6 + inst * 0.4 : 0;
+      }
+      if (!havePos || Math.abs(s.c - lastC) > 400) shownY = yFor(s.c);   // big jump (restart): snap
+      lastC = s.c; lastAt = now; havePos = true;
+      playing = s.p;
+      setDim(s.d || 0);
+      setWord(s.w ?? -1, s.wl || 0);
+      // Follow: keep the line with your current word second from the top (the line before stays visible).
+      if (s.m === 2 && s.w >= 0 && lines.length) {
+        const i = lineIndex(s.w);
+        followY = lines[Math.max(0, i - 1)].top;
+      } else followY = null;   // no word heard yet: mirror the Mac's position (Restart lands on the first spoken line)
+      $('mode').textContent = modeNames[s.m] + (s.p ? '' : ' · paused');
+      $('dot').className = s.h ? 'hear' : 'ok';
+      $('playLabel').textContent = s.p ? 'Pause' : 'Play';
+      $('playIcon').setAttribute('d', s.p ? 'M6 4h4v16H6zM14 4h4v16h-4z' : 'M7 4v16l13-8z');
+    } catch (e) {
+      if (++failures >= 3) {
+        msg.hidden = false;
+        msg.textContent = "Can't reach your Mac. Make sure TopPrompter is open on it and this iPhone is on the same network.";
+        $('dot').className = ''; $('mode').textContent = 'Offline';
+      }
+    }
+    setTimeout(poll, 70);
+  }
+
+  function frame(t) {
+    if (havePos) {
+      const ahead = Math.min(0.25, (performance.now() - lastAt) / 1000);
+      const c = lastC + (playing ? rate * ahead : 0);
+      const target = followY !== null ? followY : yFor(c);
+      shownY += (target - shownY) * (followY !== null ? 0.12 : 0.22);
+      textEl.style.transform = `translate3d(0, ${(topOffset - shownY).toFixed(2)}px, 0)`;
+    }
+    requestAnimationFrame(frame);
+  }
+
+  let topOffset = 0;
+  function measureTop() {
+    const probe = document.createElement('div');
+    probe.style.cssText = 'position:fixed;top:env(safe-area-inset-top);visibility:hidden';
+    document.body.appendChild(probe);
+    topOffset = probe.getBoundingClientRect().top + 30;   // clear of the status label
+    probe.remove();
+  }
+
+  function cmd(c) { fetch('cmd?c=' + c, { cache: 'no-store' }).catch(() => {}); }
+  function wake() { const v = $('wake'); v.play && v.play().catch(() => {}); }
+  let quietTimer;
+  function poke() { bar.classList.remove('quiet'); clearTimeout(quietTimer); quietTimer = setTimeout(() => bar.classList.add('quiet'), 3000); wake(); }
+
+  $('bRestart').onclick = () => { cmd('restart'); poke(); };
+  $('bPlay').onclick = () => { cmd('toggle'); poke(); };
+  $('bSlower').onclick = () => { cmd('slower'); poke(); };
+  $('bFaster').onclick = () => { cmd('faster'); poke(); };
+  $('bSmaller').onclick = () => { size = Math.max(18, size - 3); applySize(); poke(); };
+  $('bBigger').onclick = () => { size = Math.min(120, size + 3); applySize(); poke(); };
+  $('bMirror').onclick = () => { mirror = !mirror; applyMirror(); poke(); };
+  $('bHide').onclick = () => { bar.hidden = true; };
+  document.addEventListener('touchstart', () => { wake(); if (bar.hidden) { bar.hidden = false; poke(); } }, { passive: true });
+  document.addEventListener('click', wake);
+
+  let rt;
+  window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { measureTop(); relayout(); shownY = yFor(lastC); }, 150); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) wake(); });
+
+  measureTop(); applyMirror(); applySize();
+  poll(); requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
